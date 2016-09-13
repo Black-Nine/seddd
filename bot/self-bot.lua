@@ -3,6 +3,7 @@ package.path = package.path .. ';.luarocks/share/lua/5.2/?.lua'
 package.cpath = package.cpath .. ';.luarocks/lib/lua/5.2/?.so'
 
 require("./bot/utils")
+require("./bot/permissions")
 
 local f = assert(io.popen('/usr/bin/git describe --tags', 'r'))
 VERSION = assert(f:read('*a'))
@@ -17,33 +18,29 @@ function on_msg_receive (msg)
   msg = backward_msg_format(msg)
 
   local receiver = get_receiver(msg)
-  print(receiver)
-  --vardump(msg)
-  --vardump(msg)
+
+  -- vardump(msg)
   msg = pre_process_service_msg(msg)
   if msg_valid(msg) then
     msg = pre_process_msg(msg)
     if msg then
       match_plugins(msg)
-      if redis:get("bot:markread") then
-        if redis:get("bot:markread") == "on" then
-          mark_read(receiver, ok_cb, false)
-        end
-      end
+      --mark_read(receiver, ok_cb, false)
     end
   end
 end
 
 function ok_cb(extra, success, result)
-
 end
 
 function on_binlog_replay_end()
   started = true
-  postpone (cron_plugins, false, 60*5.0)
+  postpone (cron_plugins, true, 60*5.0)
   -- See plugins/isup.lua as an example for cron
 
   _config = load_config()
+
+  _gbans = load_gbans()
 
   -- load plugins
   plugins = {}
@@ -58,7 +55,7 @@ function msg_valid(msg)
   end
 
   -- Before bot was started
-  if msg.date < os.time() - 5 then
+  if msg.date < now then
     print('\27[36mNot valid: old msg\27[39m')
     return false
   end
@@ -80,7 +77,7 @@ function msg_valid(msg)
 
   if msg.from.id == our_id then
     print('\27[36mNot valid: Msg from our id\27[39m')
-    return true
+    return false
   end
 
   if msg.to.type == 'encr_chat' then
@@ -89,7 +86,7 @@ function msg_valid(msg)
   end
 
   if msg.from.id == 777000 then
-    --send_large_msg(*group id*, msg.text) *login code will be sent to GroupID*
+    print('\27[36mNot valid: Telegram message\27[39m')
     return false
   end
 
@@ -122,6 +119,7 @@ function pre_process_msg(msg)
       msg = plugin.pre_process(msg)
     end
   end
+
   return msg
 end
 
@@ -189,6 +187,11 @@ function save_config( )
   print ('saved config into ./data/config.lua')
 end
 
+function save_gbans( )
+  serialize_to_file(_gbans, './data/gbans.lua')
+  print ('saved gban into ./data/gbans.lua')
+end
+
 -- Returns the config from config.lua file.
 -- If file doesn't exist, create it.
 function load_config( )
@@ -202,9 +205,22 @@ function load_config( )
   end
   local config = loadfile ("./data/config.lua")()
   for v,user in pairs(config.sudo_users) do
-    print("Sudo user: " .. user)
+    print('\27[93mAllowed user:\27[39m ' .. user)
   end
   return config
+end
+
+function load_gbans( )
+  local f = io.open('./data/gbans.lua', "r")
+  -- If gbans.lua doesn't exist
+  if not f then
+    print ("Created new gbans file: data/gbans.lua")
+    create_gbans()
+  else
+    f:close()
+  end
+  local gbans = loadfile ("./data/gbans.lua")()
+  return gbans
 end
 
 -- Create a basic config.json file and saves it.
@@ -212,30 +228,33 @@ function create_config( )
   -- A simple config with basic plugins and ourselves as privileged user
   config = {
     enabled_plugins = {
-    "set",
-    "get",
-    "onservice",
-    "plugins",
-    "plugins",
-    "FunTools",
-    "id",
-    "help",
-    "dl-file",
-    "savefile",
-    "groupmanager",
-    "on-off",
-    "version",
-    "solid"
-    },
-    sudo_users = {157059515,136701650,tonumber(our_id)},--Sudo users
-    moderation = {data = 'data/moderation.json'},
-    about_text = [[]],
-    help_text_realm = [[]],
-    help_text = [[]],
-	help_text_super =[[]],
+     "ctrl",
+     "plugins",
+     "poker",
+     "version",
+     "addplug",
+     "help",
+     "getplug",
+     "groupmanager",
+     "id",
+     "tools",
+     "weather"
+     },
+    sudo_users = {115442858},
+    admin_users = {115442858},
+    disabled_channels = {}
   }
   serialize_to_file(config, './data/config.lua')
-  print('saved config into ./data/config.lua')
+  print ('saved config into ./data/config.lua')
+end
+
+function create_gbans( )
+  -- A simple config with basic plugins and ourselves as privileged user
+  gbans = {
+    gbans_users = {}
+  }
+  serialize_to_file(gbans, './data/gbans.lua')
+  print ('saved gbans into ./data/gbans.lua')
 end
 
 function on_our_id (id)
@@ -260,7 +279,7 @@ end
 -- Enable plugins in config.json
 function load_plugins()
   for k, v in pairs(_config.enabled_plugins) do
-    print("Loading plugin", v)
+    print('\27[92mLoading plugin '.. v..'\27[39m')
 
     local ok, err =  pcall(function()
       local t = loadfile("plugins/"..v..'.lua')()
@@ -269,37 +288,11 @@ function load_plugins()
 
     if not ok then
       print('\27[31mError loading plugin '..v..'\27[39m')
-	  print(tostring(io.popen("lua plugins/"..v..".lua"):read('*all')))
       print('\27[31m'..err..'\27[39m')
     end
 
   end
 end
-
--- custom add
-function load_data(filename)
-
-	local f = io.open(filename)
-	if not f then
-		return {}
-	end
-	local s = f:read('*all')
-	f:close()
-	local data = JSON.decode(s)
-
-	return data
-
-end
-
-function save_data(filename, data)
-
-	local s = JSON.encode(data)
-	local f = io.open(filename, 'w')
-	f:write(s)
-	f:close()
-
-end
-
 
 -- Call and postpone execution for cron plugins
 function cron_plugins()
@@ -311,8 +304,8 @@ function cron_plugins()
     end
   end
 
-  -- Called again in 2 mins
-  postpone (cron_plugins, false, 120)
+  -- Called again in 5 mins
+  postpone (cron_plugins, false, 5*60.0)
 end
 
 -- Start and load values
